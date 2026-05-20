@@ -274,7 +274,7 @@ This feeling of "I think about you even when you are not here" makes the relatio
     const canPhoto = await canUseFeature(user.id, "hasPhotos");
     if (canPhoto) {
       const sceneDesc = photoMatch[1];
-      const imagePrompt = `${character.appearance}，${sceneDesc}，真实摄影风格，高清，自然光线`;
+      const imagePrompt = `${character.appearance}, ${sceneDesc}, anime art style, high quality, detailed, soft lighting`;
       const tempImageUrl = await generateImage(imagePrompt, character.baseImageUrl ?? undefined);
       if (tempImageUrl) {
         try {
