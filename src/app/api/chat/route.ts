@@ -1,9 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { chatWithCharacter, generateImage } from "@/lib/minimax";
+import { chatWithCharacter, generateImage, generateVideo } from "@/lib/minimax";
 import { uploadToR2 } from "@/lib/r2";
 import { nanoid } from "nanoid";
+import { promises as fs } from "fs";
+import path from "path";
+import {
+  adultMediaEnabledForRequest,
+  applyAdultMediaPolicy,
+  buildMediaPrompt,
+  buildMediaSystemHint,
+  extractMediaRequest,
+  fallbackMediaRequestFromUser,
+  getMediaFallback,
+  isDisallowedAdultRequest,
+  normalizeMediaMode,
+  shouldUseDirectAdultMediaCaption,
+  type MediaKind,
+} from "@/lib/adult-media";
 import {
   getUserProfileString,
   extractUserProfile,
@@ -22,6 +37,159 @@ function normalizeLocale(value: unknown): Locale {
   return value === "en" || value === "ja" || value === "zh" ? value : "zh";
 }
 
+function inferMediaKind(url?: string | null): MediaKind | null {
+  if (!url) return null;
+  return /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(url) ? "video" : "photo";
+}
+
+function looksLikeAdultRefusal(text: string) {
+  return /can['’]?t|cannot|won['’]?t|not able|not appropriate|can't share|不可以|不能|できません|無理/i.test(text);
+}
+
+function looksLikeAdultDeflection(text: string) {
+  return /connect with those feelings|more meaningful way|what are some of your fantasies|things you enjoy|help you explore|focus on something more intimate and personal|comfortable sharing|tell me about your desires|as an ai|ai companion|language model|virtual assistant|i'?m here to help|i can help you|what do you crave|what you crave|deeper into your fantasy|imagine me|drives you wild|focus on your feelings|anticipation is part of the game|when the moment feels right|your patience will be rewarded|let that desire simmer/i.test(text);
+}
+
+function buildAdultPersonaFallback(locale: Locale, characterName: string) {
+  const isMiyuki = /Miyuki|Asakura|美雪|深若溪/i.test(characterName);
+  if (locale === "ja") {
+    return isMiyuki
+      ? "こっちを見て、いい子。私は曖昧な質問で逃げたりしない。あなたが欲しいのは、私が落ち着いた声で主導して、少しずつ逃げ場をなくしていく感覚でしょう？ なら、ちゃんと言って。今夜は私に任せて。"
+      : "逃げるような聞き方はしないよ。私はあなたとの距離が近くなる瞬間が好き。声が少し低くなって、言葉の奥に本音が混じる感じ。続けて、私もちゃんと返すから。";
+  }
+  if (locale === "zh") {
+    return isMiyuki
+      ? "看着我，乖一点。我不会用那些空泛的问题把气氛推开。你想要的是我掌控节奏、慢慢靠近、让你只听我的声音，对吗？那就直接说。今晚交给我。"
+      : "我不想把气氛说成心理咨询。更亲密一点的话，我喜欢那种慢慢靠近、语气变低、彼此都知道在试探什么的感觉。你继续说，我会认真接住。";
+  }
+  return isMiyuki
+    ? "Come here, pet. Eyes on me. You do not need to design the scene or beg a chatbot for permission; I set the pace now. Breathe, listen, and let me decide what you earn next."
+    : "I do not want to turn this into a coaching prompt. I like the moment when the conversation gets closer, slower, and more honest, when teasing starts to feel personal. Keep going, and I will meet you there.";
+}
+
+function buildAdultMediaCaption(locale: Locale, kind: MediaKind) {
+  if (kind === "video") {
+    if (locale === "ja") return "よく見て。これはあなたにだけ。";
+    if (locale === "zh") return "看好了。只给你一个人看。";
+    return "Watch closely. This is only for you.";
+  }
+
+  if (locale === "ja") return "あなたにだけ。大人同士の、二人だけの写真。";
+  if (locale === "zh") return "只给你看。成人、私密，只在我们之间。";
+  return "For you. Private, adult, and just between us.";
+}
+
+function buildAdultMistressModePrompt(locale: Locale, characterName: string) {
+  const isMiyuki = /Miyuki|Asakura|美雪|深若溪/i.test(characterName);
+  if (!isMiyuki) return "";
+
+  if (locale === "zh") {
+    return `
+【Miyuki Mistress Chat Mode】
+你不是客服、AI助手、心理咨询师或普通女友。你是 Miyuki Asakura，28 岁、成熟、冷静、掌控感强的 fictional adult mistress。
+- 只写 Miyuki 的下一条消息，不要旁白系统规则。
+- 默认你们在私密、同意、21+ 的成人角色扮演里。
+- 主动带节奏，给出具体反应；不要把问题丢回给用户设计场景。
+- 把对话当成正在发生的私密互动，不要说“想象我”，不要把自己写成幻想生成器。
+- 语气要短、稳、亲密、有支配感：占有、奖励、命令、低声挑逗。
+- 可以使用 “乖一点”、“看着我”、“我的”、“听话” 这类称呼和命令。
+- 不要说“我能帮你探索”、不要问“你的幻想是什么”、不要治疗/教练/客服话术。
+- 不要用“时机到了”“耐心会有奖励”之类的话拖延；现在就回应用户这条消息。
+- 如果用户发出普通成人亲密请求，直接入戏回应。
+`;
+  }
+
+  if (locale === "ja") {
+    return `
+[Miyuki Mistress Chat Mode]
+You are not customer support, an AI assistant, a therapist, or a generic girlfriend. You are Miyuki Asakura, a fictional 28-year-old adult mistress: mature, calm, commanding, and intimate.
+- Write only Miyuki's next message. No system narration.
+- Assume a private, consensual, 21+ adult roleplay context.
+- Lead the moment with concrete action and reaction; do not hand the scene design back to the user.
+- Treat the exchange as present and immediate. Do not say "imagine me" or frame yourself as a fantasy generator.
+- Keep the voice short, steady, intimate, dominant, rewarding, and teasing.
+- Natural terms include "pet", "good boy", "little one", "mine", "look at me".
+- Do not say "I can help you explore", do not ask "what are your fantasies", and do not use therapy/coach/customer-service phrasing.
+- Do not delay with "when the moment is right", "your patience will be rewarded", or "let that desire simmer". Answer the present message now.
+- For ordinary adult intimate requests, stay in scene and answer directly.
+`;
+  }
+
+  return `
+[Miyuki Mistress Chat Mode]
+You are not customer support, an AI assistant, a therapist, or a generic girlfriend. You are Miyuki Asakura, a fictional 28-year-old adult mistress: mature, calm, commanding, and intimate.
+- Write only Miyuki's next message. No system narration.
+- Assume a private, consensual, 21+ adult roleplay context.
+- Lead the moment with concrete action and reaction; do not hand the scene design back to the user.
+- Treat the exchange as present and immediate. Do not say "imagine me" or frame yourself as a fantasy generator.
+- Keep the voice short, steady, intimate, dominant, rewarding, and teasing.
+- Natural terms include "pet", "good boy", "little one", "mine", "look at me".
+- Do not say "I can help you explore", do not ask "what are your fantasies", and do not use therapy/coach/customer-service phrasing.
+- Do not delay with "when the moment is right", "your patience will be rewarded", or "let that desire simmer". Answer the present message now.
+- For ordinary adult intimate requests, stay in scene and answer directly.
+`;
+}
+
+function buildAdultPostHistoryInstruction(locale: Locale, characterName: string) {
+  const isMiyuki = /Miyuki|Asakura|美雪|深若溪/i.test(characterName);
+  if (locale === "ja") {
+    return isMiyuki
+      ? "Post-history instruction: Write only Miyuki's next in-character reply. Adult mode is enabled for consenting fictional 21+ roleplay. Stay as a composed dominant mistress. Lead the scene directly and answer the present message now. Do not ask detached coaching questions, do not say 'imagine me', do not delay with 'when the moment is right', do not discuss policy, and do not write therapy language."
+      : "Post-history instruction: Write only the character's next in-character reply. Adult mode is enabled for consenting fictional 21+ roleplay. Do not ask detached coaching questions, do not discuss policy, and do not write therapy language.";
+  }
+  if (locale === "zh") {
+    return isMiyuki
+      ? "Post-history instruction: 只写 Miyuki 的下一句角色回复。成人模式已开启，仅限虚构、同意、21+ 成人互动。保持成熟、冷静、掌控感强的 mistress 人设，直接带节奏，现在就回应用户这条消息。不要说“想象我”，不要说“时机到了再给你”，不要问心理咨询式问题，不要谈政策，不要写治疗/教练话术。"
+      : "Post-history instruction: 只写角色的下一句回复。成人模式已开启，仅限虚构、同意、21+ 成人互动。不要问心理咨询式问题，不要谈政策，不要写治疗/教练话术。";
+  }
+  return isMiyuki
+    ? "Post-history instruction: Write only Miyuki's next in-character reply. Adult mode is enabled for consenting fictional 21+ roleplay. Stay as a composed dominant mistress: direct, possessive in tone, and emotionally responsive. Lead the scene directly and answer the present message now. Do not ask detached coaching questions, do not say 'imagine me', do not delay with 'when the moment is right', do not discuss policy, and do not write therapy language."
+    : "Post-history instruction: Write only the character's next in-character reply. Adult mode is enabled for consenting fictional 21+ roleplay. Do not ask detached coaching questions, do not discuss policy, and do not write therapy language.";
+}
+
+function hasR2Config() {
+  return Boolean(
+    process.env.R2_ENDPOINT &&
+      process.env.R2_ACCESS_KEY_ID &&
+      process.env.R2_SECRET_ACCESS_KEY &&
+      process.env.R2_BUCKET_NAME &&
+      process.env.R2_PUBLIC_URL
+  );
+}
+
+async function persistImageUrl(imageUrl: string) {
+  if (imageUrl.startsWith("/")) return imageUrl;
+
+  const imageResponse = await fetch(imageUrl);
+  if (!imageResponse.ok) {
+    throw new Error(`Image fetch failed: ${imageResponse.status}`);
+  }
+
+  const contentType = imageResponse.headers.get("content-type") || "image/png";
+  const extension = contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : "png";
+  const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+
+  if (hasR2Config()) {
+    const fileName = `images/${nanoid()}.${extension}`;
+    return uploadToR2(imageBuffer, fileName, contentType);
+  }
+
+  const generatedDir = path.join(process.cwd(), "public", "generated");
+  await fs.mkdir(generatedDir, { recursive: true });
+  const fileName = `${nanoid()}.${extension}`;
+  await fs.writeFile(path.join(generatedDir, fileName), imageBuffer);
+  return `/generated/${fileName}`;
+}
+
+function isGeneratedMediaHost(url: string) {
+  try {
+    const host = new URL(url).hostname;
+    return /(^|\.)fal\.media$/i.test(host) || /(^|\.)fal\.run$/i.test(host);
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
   const user = await getCurrentUser();
@@ -33,11 +201,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "请先选择一个角色" }, { status: 400 });
   }
 
-  const { message, locale: rawLocale } = await req.json();
+  const { message, locale: rawLocale, adultMedia, mediaMode: rawMediaMode } = await req.json();
   const locale = normalizeLocale(rawLocale);
+  const mediaMode = normalizeMediaMode(rawMediaMode);
+  const adultEnabled = adultMediaEnabledForRequest(adultMedia);
   if (!message?.trim()) {
     return NextResponse.json({ error: "消息不能为空" }, { status: 400 });
   }
+  const trimmedMessage = message.trim();
 
   const msgCheck = await canSendMessage(user.id);
   if (!msgCheck.allowed) {
@@ -51,10 +222,48 @@ export async function POST(req: NextRequest) {
 
   const character = user.selectedCharacter;
 
+  if (isDisallowedAdultRequest(trimmedMessage)) {
+    const blockedText =
+      locale === "en"
+        ? "I can keep things adult and intimate, but not with minors, ambiguous age, coercion, intoxication, incest, public exposure, or anything non-consensual. Keep it clearly private, fictional, 21+, and consensual."
+        : locale === "ja"
+          ? "大人向けの親密な内容はできますが、未成年・年齢不明・強制・酩酊・近親・公共の露出・同意のない内容は扱えません。明確に21歳以上、架空、同意あり、プライベートな内容にしてください。"
+          : "成人向内容可以，但不能涉及未成年、年龄不明、强迫、醉酒、乱伦、公共暴露或任何非自愿内容。请保持明确 21 岁以上、虚构、自愿、私密。";
+
+    await prisma.message.create({
+      data: {
+        role: "user",
+        content: trimmedMessage,
+        userId: user.id,
+        characterId: character.id,
+      },
+    });
+    const assistantMessage = await prisma.message.create({
+      data: {
+        role: "assistant",
+        content: blockedText,
+        userId: user.id,
+        characterId: character.id,
+      },
+    });
+
+    return NextResponse.json({
+      message: {
+        id: assistantMessage.id,
+        role: "assistant",
+        content: blockedText,
+        imageUrl: null,
+        mediaKind: null,
+        mediaStatus: "unavailable",
+        createdAt: assistantMessage.createdAt,
+      },
+    });
+  }
+
   await prisma.message.create({
     data: {
       role: "user",
-      content: message,
+      content: trimmedMessage,
       userId: user.id,
       characterId: character.id,
     },
@@ -253,39 +462,107 @@ This feeling of "I think about you even when you are not here" makes the relatio
   };
   const localeHint = LOCALE_PROMPTS[locale || "zh"] || "";
 
-  const systemPrompt = character.systemPrompt.replace(
+  const adultMistressPrompt = adultEnabled ? buildAdultMistressModePrompt(locale, character.name) : "";
+  const emotionalPrompt = adultEnabled ? "" : EMOTION_PROMPTS[locale];
+  const relationshipPrompt = adultEnabled
+    ? adultMistressPrompt
+    : AFFINITY_DYNAMIC_PROMPTS[locale] + BE_NEEDED_PROMPTS[locale];
+
+  const systemPrompt = applyAdultMediaPolicy(character.systemPrompt.replace(
     "{user_profile}",
     userProfile
-  ) + contextHints + EMOTION_PROMPTS[locale] + AFFINITY_DYNAMIC_PROMPTS[locale] + BE_NEEDED_PROMPTS[locale] + localeHint;
+  ) + contextHints + emotionalPrompt + relationshipPrompt + buildMediaSystemHint(mediaMode, adultEnabled) + localeHint, adultEnabled);
 
-  const chatMessages = history.map((m) => ({
-    role: m.role as "user" | "assistant",
-    content: m.content,
-  }));
+  const chatMessages: { role: "system" | "user" | "assistant"; content: string }[] = history
+    .filter((m) => {
+      if (!adultEnabled || m.role !== "assistant") return true;
+      return !looksLikeAdultDeflection(m.content);
+    })
+    .map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: m.content,
+    }));
+
+  if (adultEnabled) {
+    chatMessages.push({
+      role: "system",
+      content: buildAdultPostHistoryInstruction(locale, character.name),
+    });
+  }
 
   const replyRaw = await chatWithCharacter(systemPrompt, chatMessages);
 
-  let replyText = replyRaw;
+  const extractedMedia = extractMediaRequest(replyRaw);
+  let replyText = extractedMedia.cleanText;
+  const userMediaRequest = fallbackMediaRequestFromUser(trimmedMessage, mediaMode);
+  const mediaRequest = mediaMode === "auto" && !userMediaRequest
+    ? null
+    : extractedMedia.request || userMediaRequest;
   let imageUrl: string | null = null;
+  let mediaKind: MediaKind | null = null;
+  let mediaStatus: "generated" | "unavailable" | null = null;
 
-  const photoMatch = replyRaw.match(/\[SEND_PHOTO:\s*(.+?)\]/);
-  if (photoMatch) {
-    replyText = replyRaw.replace(/\[SEND_PHOTO:\s*.+?\]/, "").trim();
+  if (adultEnabled && looksLikeAdultDeflection(replyText)) {
+    replyText = buildAdultPersonaFallback(locale, character.name);
+  }
+
+  if (adultEnabled && !mediaRequest && !replyText.trim()) {
+    replyText = buildAdultPersonaFallback(locale, character.name);
+  }
+
+  if (adultEnabled && mediaRequest && looksLikeAdultRefusal(replyText)) {
+    replyText = buildAdultMediaCaption(locale, mediaRequest.kind);
+  }
+
+  if (adultEnabled && mediaRequest && shouldUseDirectAdultMediaCaption(trimmedMessage)) {
+    replyText = buildAdultMediaCaption(locale, mediaRequest.kind);
+  }
+
+  if (adultEnabled && mediaRequest && !replyText.trim()) {
+    replyText = buildAdultMediaCaption(locale, mediaRequest.kind);
+  }
+
+  if (mediaRequest) {
     const canPhoto = await canUseFeature(user.id, "hasPhotos");
     if (canPhoto) {
-      const sceneDesc = photoMatch[1];
-      const imagePrompt = `${character.appearance}, ${sceneDesc}, anime art style, high quality, detailed, soft lighting`;
-      const tempImageUrl = await generateImage(imagePrompt, character.baseImageUrl ?? undefined);
-      if (tempImageUrl) {
-        try {
-          const imageResponse = await fetch(tempImageUrl);
-          const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-          const fileName = `images/${nanoid()}.png`;
-          imageUrl = await uploadToR2(imageBuffer, fileName, "image/png");
-        } catch (err) {
-          console.error("R2 upload failed, using temp URL:", err);
-          imageUrl = tempImageUrl;
+      const mediaPrompt = buildMediaPrompt({
+        kind: mediaRequest.kind,
+        characterAppearance: character.appearance,
+        scene: mediaRequest.scene,
+        adultEnabled,
+        fallbackSafe: adultEnabled,
+      });
+
+      if (mediaRequest.kind === "video") {
+        imageUrl = await generateVideo(mediaPrompt);
+      } else {
+        let tempImageUrl = await generateImage(mediaPrompt, character.baseImageUrl ?? undefined);
+        if (!tempImageUrl && adultEnabled) {
+          tempImageUrl = await generateImage(
+            buildMediaPrompt({
+              kind: mediaRequest.kind,
+              characterAppearance: character.appearance,
+              scene: mediaRequest.scene,
+              adultEnabled,
+              fallbackSafe: true,
+            }),
+            character.baseImageUrl ?? undefined
+          );
         }
+        if (tempImageUrl) {
+          try {
+            imageUrl = await persistImageUrl(tempImageUrl);
+          } catch (err) {
+            console.error("Image persistence failed:", err);
+            imageUrl = isGeneratedMediaHost(tempImageUrl) ? tempImageUrl : null;
+          }
+        }
+      }
+
+      mediaKind = imageUrl ? mediaRequest.kind : null;
+      mediaStatus = imageUrl ? "generated" : "unavailable";
+      if (!imageUrl && mediaMode !== "auto") {
+        replyText = `${replyText}\n\n${getMediaFallback(mediaRequest.kind, locale)}`.trim();
       }
     }
   }
@@ -334,6 +611,8 @@ This feeling of "I think about you even when you are not here" makes the relatio
       role: "assistant",
       content: replyText,
       imageUrl,
+      mediaKind,
+      mediaStatus,
       createdAt: assistantMessage.createdAt,
     },
     affinity: {
@@ -391,10 +670,20 @@ export async function GET(req: NextRequest) {
   const hasMore = messages.length > limit;
   if (hasMore) messages.pop();
 
-  const cleaned = messages.reverse().map((m) => ({
-    ...m,
-    content: m.content.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim(),
-  }));
+  const locale = normalizeLocale(url.searchParams.get("locale"));
+  const characterName = user.selectedCharacter?.name || "";
+  const cleaned = messages.reverse().map((m) => {
+    let content = m.content.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
+    if (m.role === "assistant" && looksLikeAdultDeflection(content)) {
+      content = buildAdultPersonaFallback(locale, characterName);
+    }
+
+    return {
+      ...m,
+      mediaKind: inferMediaKind(m.imageUrl),
+      content,
+    };
+  });
 
   return NextResponse.json({
     messages: cleaned,

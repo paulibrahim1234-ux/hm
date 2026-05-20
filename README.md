@@ -7,7 +7,7 @@
 - Framework: Next.js 16 / React 19 / Turbopack
 - Database: Neon PostgreSQL，通过 `DATABASE_URL` 连接，不使用本地数据库
 - ORM: Prisma 7，使用 `@prisma/adapter-pg`
-- LLM: OpenRouter，模型由 `LLM_MODEL` 控制
+- LLM: OpenAI-compatible chat endpoint，模型由 `LLM_MODEL` 控制；可用 OpenRouter、OpenAI 或本地 LM Studio/vLLM/llama.cpp 网关
 - Image & TTS: MiniMax，仅用于图片生成和语音合成
 - Auth: JWT + Better Auth，支持 Google OAuth；GitHub OAuth 可选
 - Billing: Creem 支付结构已接入，未配置 Creem key 时支付功能不可用
@@ -24,6 +24,43 @@
 - 心情系统：聊天后异步分析心情，生成心情日记。
 - 付费体系：Free / Plus / Pro、Creem Checkout、Customer Portal、积分余额。
 - 跨平台：Telegram/QQ 接入结构已预留。
+
+## 成人媒体与视频
+
+聊天输入栏新增媒体模式：自动 / 图片 / 视频，以及成人模式开关。开启成人模式后，后端会把角色原本的非成人限制替换为成人媒体边界：允许明确 21+、同意、虚构成人的私密浪漫或 NSFW 聊天，并拒绝未成年人、年龄模糊、胁迫、醉酒、暴力、乱伦、公开暴露等场景。Miyuki 在成人模式下会额外获得成熟、同意边界内的 mistress / dominant persona 覆盖，避免退回普通女友话术。
+
+聊天模型走 OpenAI-compatible 配置。普通 OpenAI 模型可能仍会拒绝成人露骨内容；如果目标是 NSFW 文字角色扮演，应使用允许该用例的 OpenRouter 模型或本地兼容接口：
+
+```bash
+OPENROUTER_API_KEY="sk-or-v1-..."
+OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
+LLM_MODEL="sao10k/l3.3-euryale-70b"
+OPENROUTER_MODEL="sao10k/l3.3-euryale-70b"
+
+# 或者直接指向本地/自建 OpenAI-compatible 网关
+LLM_API_KEY="local-key-or-provider-key"
+LLM_BASE_URL="http://127.0.0.1:1234/v1"
+LLM_MODEL="local-model-name"
+```
+
+图片推荐使用 fal.ai Nano Banana 2；`IMAGE_PROVIDER=auto` 会先走 OpenAI 图片，再尝试 fal，最后回退到 rpbot 风格的 Pollinations 图片 URL；也可以设置 `IMAGE_PROVIDER=pollinations` 直接走 Pollinations。视频走通用 HTTP 适配器：
+
+```bash
+ADULT_MEDIA_ENABLED="true"
+IMAGE_PROVIDER="fal"
+IMAGE_MODEL="fal-ai/nano-banana-2"
+FAL_KEY="..."
+FAL_IMAGE_MODEL="fal-ai/nano-banana-2"
+FAL_IMAGE_ASPECT_RATIO="9:16"
+FAL_IMAGE_RESOLUTION="1K"
+FAL_IMAGE_SAFETY_TOLERANCE="6"
+
+VIDEO_GENERATION_ENDPOINT="https://your-video-provider.example/generate"
+VIDEO_GENERATION_API_KEY="..."
+VIDEO_GENERATION_MODEL="..."
+```
+
+视频接口需要返回 `videoUrl`、`video_url`、`url` 或嵌套在 `data/result/output` 里的 URL。未配置视频接口时，应用会在聊天里给出不可用提示，不会中断普通回复。
 
 ## 互动系统
 

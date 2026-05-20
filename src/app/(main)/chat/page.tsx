@@ -29,6 +29,9 @@ import {
   Crown,
   Gamepad2,
   HeartHandshake,
+  Camera,
+  Video,
+  Flame,
 } from "lucide-react";
 
 interface Message {
@@ -36,6 +39,8 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   imageUrl?: string | null;
+  mediaKind?: "photo" | "video" | null;
+  mediaStatus?: "generated" | "unavailable" | null;
   audioUrl?: string | null;
   createdAt: string;
 }
@@ -99,6 +104,11 @@ function getLocalizedLevelName(
   return levelInfo.name;
 }
 
+function inferMediaKind(url?: string | null): "photo" | "video" | null {
+  if (!url) return null;
+  return /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(url) ? "video" : "photo";
+}
+
 export default function ChatPage() {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
@@ -133,6 +143,8 @@ export default function ChatPage() {
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [goodnightLoading, setGoodnightLoading] = useState(false);
   const [goodnightResult, setGoodnightResult] = useState<{ text: string; audioUrl: string | null } | null>(null);
+  const [adultMedia, setAdultMedia] = useState(true);
+  const [mediaMode, setMediaMode] = useState<"auto" | "photo" | "video">("auto");
 
   const [billingPlan, setBillingPlan] = useState<string>("free");
   const [msgRemaining, setMsgRemaining] = useState<number>(-1);
@@ -206,7 +218,7 @@ export default function ChatPage() {
     }
 
     if (user?.selectedCharacterId) {
-      fetch("/api/chat")
+      fetch(`/api/chat?locale=${locale}`)
         .then((res) => res.json())
         .then((data) => {
           setMessages(data.messages || []);
@@ -277,7 +289,7 @@ export default function ChatPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userMsg, locale }),
+        body: JSON.stringify({ message: userMsg, locale, adultMedia, mediaMode }),
       });
 
       const data = await res.json();
@@ -908,9 +920,16 @@ export default function ChatPage() {
                   <p className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                 </div>
                 {msg.imageUrl && (
-                  <div className="mt-2 rounded-xl overflow-hidden max-w-xs">
-                    <img src={msg.imageUrl} alt="" className="w-full rounded-xl" loading="lazy" />
+                  <div className="mt-2 rounded-xl overflow-hidden max-w-xs bg-surface border border-card-border">
+                    {(msg.mediaKind || inferMediaKind(msg.imageUrl)) === "video" ? (
+                      <video src={msg.imageUrl} className="w-full rounded-xl" controls playsInline preload="metadata" />
+                    ) : (
+                      <img src={msg.imageUrl} alt="" className="w-full rounded-xl" loading="lazy" />
+                    )}
                   </div>
+                )}
+                {msg.mediaStatus === "unavailable" && (
+                  <p className="text-[10px] text-muted/70 mt-1 ml-1">{t("chat.media_unavailable")}</p>
                 )}
                 {msg.role === "assistant" && (
                   <div className="flex items-center gap-2 mt-1.5 ml-1">
@@ -980,7 +999,7 @@ export default function ChatPage() {
           </div>
         )}
         {/* Feature buttons */}
-        <div className="max-w-2xl mx-auto flex items-center gap-1 px-4 pt-2">
+        <div className="max-w-2xl mx-auto flex items-center gap-1 px-4 pt-2 flex-wrap">
           {([
             { key: "healing" as PanelType, icon: HeartHandshake, label: t("healing.title") },
             { key: "games" as PanelType, icon: Gamepad2, label: t("games.title") },
@@ -1002,6 +1021,35 @@ export default function ChatPage() {
               <span className="hidden sm:inline">{label}</span>
             </button>
           ))}
+          <div className="ml-auto flex items-center gap-1 rounded-lg bg-surface p-1">
+            {([
+              { key: "auto", icon: Sparkles, label: t("chat.media_auto") },
+              { key: "photo", icon: Camera, label: t("chat.media_photo") },
+              { key: "video", icon: Video, label: t("chat.media_video") },
+            ] as const).map(({ key, icon: Icon, label }) => (
+              <button
+                key={key}
+                onClick={() => setMediaMode(key)}
+                className={`h-7 px-2 rounded-md text-[11px] flex items-center gap-1 transition-colors ${
+                  mediaMode === key ? "bg-card-bg text-primary shadow-sm" : "text-muted hover:text-foreground"
+                }`}
+                title={label}
+              >
+                <Icon size={13} />
+                <span className="hidden md:inline">{label}</span>
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => setAdultMedia((value) => !value)}
+            className={`h-9 px-2.5 rounded-lg text-[11px] flex items-center gap-1 transition-all ${
+              adultMedia ? "bg-accent-rose/15 text-accent-rose" : "text-muted hover:text-foreground hover:bg-surface"
+            }`}
+            title={adultMedia ? t("chat.adult_on") : t("chat.adult_off")}
+          >
+            <Flame size={13} />
+            <span className="hidden sm:inline">{adultMedia ? t("chat.adult_on") : t("chat.adult_off")}</span>
+          </button>
         </div>
         {/* Input area */}
         <div className="max-w-2xl mx-auto flex items-end gap-3 px-4 py-2.5">

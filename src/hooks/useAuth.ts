@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { authClient } from "@/lib/auth-client";
 
 interface User {
   id: string;
@@ -19,7 +18,6 @@ interface User {
 }
 
 export function useAuth() {
-  const { data: session, isPending } = authClient.useSession();
   const [user, setUser] = useState<User | null>(null);
   const [enriching, setEnriching] = useState(true);
 
@@ -43,18 +41,15 @@ export function useAuth() {
   }, []);
 
   useEffect(() => {
-    if (isPending) return;
-
     setEnriching(true);
     enrichUser();
-  }, [session, isPending, enrichUser]);
+  }, [enrichUser]);
 
   const logout = async () => {
-    await authClient.signOut().catch(() => {});
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
-    setUser(null);
-    window.location.href = "/login";
+    await enrichUser();
+    window.location.href = "/chat";
   };
 
-  return { user, loading: isPending || enriching, logout, refreshUser: enrichUser };
+  return { user, loading: enriching, logout, refreshUser: enrichUser };
 }
