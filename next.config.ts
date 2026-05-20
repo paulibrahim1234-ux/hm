@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  allowedDevOrigins: ["*.loca.lt", "*.trycloudflare.com", "*.pinggy.link", "*.tunnelmole.net"],
 };
 
 export default nextConfig;

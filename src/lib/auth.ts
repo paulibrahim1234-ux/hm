@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { cookies, headers } from "next/headers";
 import { prisma } from "./prisma";
 import { auth } from "./better-auth";
+import { CHARACTER_DATA } from "./characters";
 
 const JWT_SECRET = process.env.JWT_SECRET || "fallback-secret";
 
@@ -85,6 +86,52 @@ export async function getAuthHeaders(request?: Request) {
   return headersList;
 }
 
+async function getDefaultCharacterId() {
+  const preferred = await prisma.character.findUnique({
+    where: { name: "Miyuki Asakura" },
+    select: { id: true },
+  });
+  if (preferred) return preferred.id;
+
+  const first = await prisma.character.findFirst({
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+  if (first) return first.id;
+
+  const seeded = await prisma.character.create({
+    data: CHARACTER_DATA[4],
+    select: { id: true },
+  });
+  return seeded.id;
+}
+
+async function ensureSelectedCharacter(userId: string, selectedCharacterId?: string | null) {
+  if (selectedCharacterId) return getUserById(userId);
+
+  const defaultCharacterId = await getDefaultCharacterId();
+  await prisma.user.update({
+    where: { id: userId },
+    data: { selectedCharacterId: defaultCharacterId },
+  });
+  return getUserById(userId);
+}
+
+async function getOrCreateGuestUser() {
+  const guestUsername = "guest";
+  let user = await prisma.user.findUnique({ where: { username: guestUsername } });
+  if (!user) {
+    user = await prisma.user.create({
+      data: {
+        username: guestUsername,
+        name: "Guest",
+        selectedCharacterId: await getDefaultCharacterId(),
+      },
+    });
+  }
+  return ensureSelectedCharacter(user.id, user.selectedCharacterId);
+}
+
 export async function getCurrentUser(request?: Request) {
   const cookieStore = await cookies();
 
@@ -93,7 +140,7 @@ export async function getCurrentUser(request?: Request) {
     const decoded = verifyToken(jwtToken);
     if (decoded) {
       const user = await getUserById(decoded.userId);
-      if (user) return user;
+      if (user) return ensureSelectedCharacter(user.id, user.selectedCharacterId);
     }
   }
 
@@ -102,11 +149,14 @@ export async function getCurrentUser(request?: Request) {
       headers: await getAuthHeaders(request),
     });
     if (session?.user?.id) {
-      return getUserById(session.user.id);
+      const user = await getUserById(session.user.id);
+      if (user) return ensureSelectedCharacter(user.id, user.selectedCharacterId);
     }
   } catch (error) {
     console.error("Better Auth session lookup failed:", error);
   }
 
-  return null;
+  // Login disabled: fall back to a shared guest user so every API route
+  // works without authentication.
+  return getOrCreateGuestUser();
 }

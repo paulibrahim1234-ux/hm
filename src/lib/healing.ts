@@ -378,7 +378,7 @@ async function generateMirrorReply(args: {
   transcript: HealingMessage[];
   userMessage: string;
 }) {
-  if (!process.env.OPENROUTER_API_KEY) return getMirrorFallback(args.locale, "no_key");
+  if (!process.env.OPENAI_API_KEY) return getMirrorFallback(args.locale, "no_key");
 
   try {
     const profile = await getUserProfileString(args.userId);

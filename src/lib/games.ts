@@ -897,7 +897,7 @@ async function generateCharacterGameReply(args: {
   instruction: string;
   fallback: string;
 }) {
-  if (!process.env.OPENROUTER_API_KEY) return args.fallback;
+  if (!process.env.OPENAI_API_KEY) return args.fallback;
 
   try {
     const profile = await getUserProfileString(args.userId);

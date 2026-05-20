@@ -3,15 +3,9 @@ import { PLANS, type PlanType, type PlanConfig } from "./billing-plans";
 
 export { PLANS, CREDIT_PACKS, CREDIT_COSTS, type PlanType, type PlanConfig } from "./billing-plans";
 
-export async function getUserPlan(userId: string): Promise<PlanType> {
-  const sub = await prisma.subscription.findUnique({ where: { userId } });
-  if (!sub) return "free";
-  if (sub.currentPeriodEnd && sub.currentPeriodEnd < new Date()) return "free";
-
-  const activeStatuses = new Set(["active", "trialing", "past_due", "canceled", "scheduled_cancel"]);
-  if (!activeStatuses.has(sub.status)) return "free";
-
-  return sub.plan as PlanType;
+export async function getUserPlan(_userId: string): Promise<PlanType> {
+  // Paywalls disabled: every user is treated as Pro.
+  return "pro";
 }
 
 export async function getUserPlanConfig(userId: string): Promise<PlanConfig> {
@@ -31,43 +25,26 @@ export async function getDailyMessageCount(userId: string): Promise<number> {
   });
 }
 
-export async function canSendMessage(userId: string): Promise<{ allowed: boolean; remaining: number; plan: PlanType }> {
-  const plan = await getUserPlan(userId);
-  const config = PLANS[plan];
-
-  if (config.dailyMessages === -1) {
-    return { allowed: true, remaining: -1, plan };
-  }
-
-  const count = await getDailyMessageCount(userId);
-  const remaining = Math.max(0, config.dailyMessages - count);
-  return { allowed: remaining > 0, remaining, plan };
+export async function canSendMessage(_userId: string): Promise<{ allowed: boolean; remaining: number; plan: PlanType }> {
+  // Paywalls disabled: unlimited messages.
+  return { allowed: true, remaining: -1, plan: "pro" };
 }
 
-export async function canUseFeature(userId: string, feature: keyof Pick<PlanConfig, "hasVoice" | "hasPhotos" | "hasMoodDiary" | "hasGoodnight" | "hasMemory" | "hasExternalLink" | "hasHealing">): Promise<boolean> {
-  const config = await getUserPlanConfig(userId);
-  return config[feature];
+export async function canUseFeature(
+  _userId: string,
+  _feature: keyof Pick<PlanConfig, "hasVoice" | "hasPhotos" | "hasMoodDiary" | "hasGoodnight" | "hasMemory" | "hasExternalLink" | "hasHealing">
+): Promise<boolean> {
+  // Paywalls disabled: every feature is available.
+  return true;
 }
 
-export async function getCredits(userId: string): Promise<number> {
-  const balance = await prisma.creditBalance.findUnique({ where: { userId } });
-  return balance?.balance ?? 0;
+export async function getCredits(_userId: string): Promise<number> {
+  // Paywalls disabled: effectively unlimited credits.
+  return Number.MAX_SAFE_INTEGER;
 }
 
-export async function useCredits(userId: string, amount: number, description: string): Promise<boolean> {
-  const balance = await prisma.creditBalance.findUnique({ where: { userId } });
-  if (!balance || balance.balance < amount) return false;
-
-  await prisma.$transaction([
-    prisma.creditBalance.update({
-      where: { userId },
-      data: { balance: { decrement: amount }, totalUsed: { increment: amount } },
-    }),
-    prisma.transaction.create({
-      data: { userId, type: "credit_use", amount: 0, credits: -amount, description, status: "completed" },
-    }),
-  ]);
-
+export async function useCredits(_userId: string, _amount: number, _description: string): Promise<boolean> {
+  // Paywalls disabled: credit spend is a no-op.
   return true;
 }
 
