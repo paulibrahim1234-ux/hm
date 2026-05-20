@@ -85,6 +85,18 @@ export async function getAuthHeaders(request?: Request) {
   return headersList;
 }
 
+async function getOrCreateGuestUser() {
+  const guestUsername = "guest";
+  let user = await prisma.user.findUnique({ where: { username: guestUsername } });
+  if (!user) {
+    await prisma.user.create({
+      data: { username: guestUsername, name: "Guest" },
+    });
+    user = await prisma.user.findUnique({ where: { username: guestUsername } });
+  }
+  return getUserById(user!.id);
+}
+
 export async function getCurrentUser(request?: Request) {
   const cookieStore = await cookies();
 
@@ -102,11 +114,14 @@ export async function getCurrentUser(request?: Request) {
       headers: await getAuthHeaders(request),
     });
     if (session?.user?.id) {
-      return getUserById(session.user.id);
+      const user = await getUserById(session.user.id);
+      if (user) return user;
     }
   } catch (error) {
     console.error("Better Auth session lookup failed:", error);
   }
 
-  return null;
+  // Login disabled: fall back to a shared guest user so every API route
+  // works without authentication.
+  return getOrCreateGuestUser();
 }
