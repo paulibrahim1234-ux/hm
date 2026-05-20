@@ -153,12 +153,14 @@ export default function RegisterPage() {
                 <p className="text-accent-rose text-sm text-center">{error}</p>
               )}
 
-              <Turnstile
-                siteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY!}
-                onSuccess={(token) => {
-                  setTurnstileToken(token);
-                }}
-              />
+              {process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY && (
+                <Turnstile
+                  siteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY}
+                  onSuccess={(token) => {
+                    setTurnstileToken(token);
+                  }}
+                />
+              )}
 
               <button
                 type="submit"

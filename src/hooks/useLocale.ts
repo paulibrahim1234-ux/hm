@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { type Locale, t as translate } from "@/lib/i18n";
 
 export function useLocale() {
-  const [locale, setLocaleState] = useState<Locale>("zh");
+  const [locale, setLocaleState] = useState<Locale>("en");
 
   useEffect(() => {
     const saved = localStorage.getItem("locale") as Locale | null;
@@ -13,8 +13,8 @@ export function useLocale() {
     } else {
       const lang = navigator.language.toLowerCase();
       if (lang.startsWith("ja")) setLocaleState("ja");
-      else if (lang.startsWith("en")) setLocaleState("en");
-      else setLocaleState("zh");
+      else if (lang.startsWith("zh")) setLocaleState("zh");
+      else setLocaleState("en");
     }
   }, []);
 

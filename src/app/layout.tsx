@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "她在 - AI 陪伴",
-  description: "一个记得你、懂你、有自己性格的虚拟陪伴角色",
+  title: "SheZai — AI Companion",
+  description: "A virtual companion who remembers you, understands you, and has a personality of their own.",
 };
 
 export default function RootLayout({

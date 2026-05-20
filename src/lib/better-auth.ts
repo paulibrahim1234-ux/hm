@@ -44,11 +44,7 @@ if (!AUTH_SECRET) {
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
-if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
-  throw new Error(
-    "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars are required."
-  );
-}
+const GOOGLE_OAUTH_ENABLED = Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
 
 function getSharedCookieDomain(url: string) {
   try {
@@ -89,14 +85,16 @@ export const auth = betterAuth({
     enabled: true,
   },
 
-  socialProviders: {
-    google: {
-      clientId: GOOGLE_CLIENT_ID,
-      clientSecret: GOOGLE_CLIENT_SECRET,
-      redirectURI: `${AUTH_ORIGIN}/api/auth/callback/google`,
-      prompt: "select_account",
-    },
-  },
+  socialProviders: GOOGLE_OAUTH_ENABLED
+    ? {
+        google: {
+          clientId: GOOGLE_CLIENT_ID!,
+          clientSecret: GOOGLE_CLIENT_SECRET!,
+          redirectURI: `${AUTH_ORIGIN}/api/auth/callback/google`,
+          prompt: "select_account",
+        },
+      }
+    : {},
 
   session: {
     expiresIn: 60 * 60 * 24 * 30, // 30 days
