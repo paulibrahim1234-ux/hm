@@ -1,7 +1,12 @@
 import OpenAI from "openai";
+import { promises as fs } from "fs";
+import path from "path";
+import { nanoid } from "nanoid";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const LLM_MODEL = process.env.LLM_MODEL || "gpt-4o-mini";
+
+const GENERATED_DIR = path.join(process.cwd(), "public", "generated");
 
 const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY || "";
 const MINIMAX_BASE_URL = process.env.MINIMAX_BASE_URL || "https://api.minimaxi.com/v1";
@@ -28,78 +33,64 @@ export async function chatWithCharacter(
   return raw.trim();
 }
 
+const IMAGE_MODEL = process.env.IMAGE_MODEL || "gpt-image-1";
+const TTS_MODEL = process.env.TTS_MODEL || "gpt-4o-mini-tts";
+
 export async function generateImage(
   prompt: string,
-  referenceImageUrl?: string
+  _referenceImageUrl?: string
 ): Promise<string | null> {
-  if (!MINIMAX_API_KEY) return null;
+  if (!OPENAI_API_KEY) return null;
   try {
-    const body: Record<string, unknown> = {
-      model: "image-01",
+    const response = await llmClient.images.generate({
+      model: IMAGE_MODEL,
       prompt,
-      aspect_ratio: "3:4",
-      response_format: "url",
+      size: "1024x1024",
       n: 1,
-      prompt_optimizer: true,
-    };
-
-    if (referenceImageUrl) {
-      body.subject_reference = [
-        { type: "character", image_file: referenceImageUrl },
-      ];
-    }
-
-    const response = await fetch(`${MINIMAX_BASE_URL}/image_generation`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${MINIMAX_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
     });
-
-    const result = await response.json();
-    return result?.data?.image_urls?.[0] || null;
+    const b64 = response.data?.[0]?.b64_json;
+    if (b64) {
+      await fs.mkdir(GENERATED_DIR, { recursive: true });
+      const filename = `${nanoid()}.png`;
+      const filePath = path.join(GENERATED_DIR, filename);
+      await fs.writeFile(filePath, Buffer.from(b64, "base64"));
+      return `/generated/${filename}`;
+    }
+    const url = response.data?.[0]?.url;
+    return url ?? null;
   } catch (error) {
     console.error("Image generation failed:", error);
     return null;
   }
 }
 
+// Map a few MiniMax-style voice IDs onto OpenAI voices; fall back to "alloy".
+const OPENAI_VOICE_MAP: Record<string, string> = {
+  "female-shaonv": "nova",
+  "female-tianmei": "shimmer",
+  "female-yujie": "sage",
+  "male-qn-qingse": "ash",
+  "male-qn-jingying": "onyx",
+};
+
 export async function generateTTS(
   text: string,
   voiceId: string = "female-shaonv"
 ): Promise<string | null> {
-  if (!MINIMAX_API_KEY) return null;
+  if (!OPENAI_API_KEY) return null;
   try {
-    const response = await fetch(`${MINIMAX_BASE_URL}/t2a_v2`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${MINIMAX_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "speech-2.8-hd",
-        text,
-        stream: false,
-        output_format: "url",
-        voice_setting: {
-          voice_id: voiceId,
-          speed: 1,
-          vol: 1,
-          pitch: 0,
-        },
-        audio_setting: {
-          sample_rate: 32000,
-          bitrate: 128000,
-          format: "mp3",
-          channel: 1,
-        },
-      }),
+    const voice = OPENAI_VOICE_MAP[voiceId] || "alloy";
+    const response = await llmClient.audio.speech.create({
+      model: TTS_MODEL,
+      voice,
+      input: text,
+      response_format: "mp3",
     });
-
-    const result = await response.json();
-    return result?.data?.audio || null;
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await fs.mkdir(GENERATED_DIR, { recursive: true });
+    const filename = `${nanoid()}.mp3`;
+    await fs.writeFile(path.join(GENERATED_DIR, filename), buffer);
+    return `/generated/${filename}`;
   } catch (error) {
     console.error("TTS generation failed:", error);
     return null;
