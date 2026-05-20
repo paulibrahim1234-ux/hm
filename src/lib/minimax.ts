@@ -1,61 +1,12 @@
 import OpenAI from "openai";
-import Anthropic from "@anthropic-ai/sdk";
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
-const LLM_MODEL = process.env.LLM_MODEL || "claude-opus-4-7";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const LLM_MODEL = process.env.LLM_MODEL || "gpt-4o-mini";
 
 const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY || "";
 const MINIMAX_BASE_URL = process.env.MINIMAX_BASE_URL || "https://api.minimaxi.com/v1";
 
-const anthropicClient = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
-
-type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
-type ChatCompletionParams = {
-  model: string;
-  messages: ChatMessage[];
-  max_tokens?: number;
-  temperature?: number;
-};
-
-// Anthropic adapter exposing an OpenAI-shaped `chat.completions.create` so
-// existing call sites work unchanged.
-export const llmClient = {
-  chat: {
-    completions: {
-      create: async (params: ChatCompletionParams) => {
-        const systemPrompt = params.messages
-          .filter((m) => m.role === "system")
-          .map((m) => m.content)
-          .join("\n\n");
-        const turnMessages = params.messages
-          .filter((m) => m.role !== "system")
-          .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
-
-        // Opus 4.7 removes `temperature`; passing it returns 400.
-        const isOpus47 = params.model.startsWith("claude-opus-4-7");
-
-        const response = await anthropicClient.messages.create({
-          model: params.model,
-          max_tokens: params.max_tokens ?? 4096,
-          messages: turnMessages,
-          ...(systemPrompt ? { system: systemPrompt } : {}),
-          ...(!isOpus47 && params.temperature !== undefined
-            ? { temperature: params.temperature }
-            : {}),
-        });
-
-        const text = response.content
-          .filter((b): b is Anthropic.TextBlock => b.type === "text")
-          .map((b) => b.text)
-          .join("");
-
-        return {
-          choices: [{ message: { role: "assistant" as const, content: text } }],
-        };
-      },
-    },
-  },
-};
+export const llmClient = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 export const minimaxClient = new OpenAI({
   baseURL: MINIMAX_BASE_URL,
